@@ -9,11 +9,15 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@latest"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 10px; background: #f0f0f0; }
-        #video { width: 100%; max-width: 400px; }
+        #video, #canvas { width: 100%; max-width: 400px; max-width: 100vw; }
         #canvas { display: none; }
-        button { margin: 10px; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; touch-action: manipulation; } /* Add touch-action for better mobile response */
-        #output { margin-top: 20px; padding: 10px; background: #fff; border: 1px solid #ccc; }
-        #hologram { width: 100%; height: 200px; background: #eee; } /* Placeholder for AR hologram */
+        button { margin: 10px; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; touch-action: manipulation; border-radius: 5px; }
+        button:disabled { background: #aaa; color: #fff; }
+        #output { margin-top: 20px; padding: 10px; background: #fff; border: 1px solid #ccc; max-height: 200px; overflow-y: auto; }
+        #hologram { width: 100%; height: 200px; background: #eee; }
+        @media (max-width: 500px) {
+            #hologram { height: 120px; }
+        }
     </style>
 </head>
 <body>
@@ -21,12 +25,12 @@
     <p>Demo: Scan skin or environment with camera for health insights. Disclaimer: For educational use only.</p>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" width="300" height="300"></canvas>
-    <button id="startCamera">Start Camera</button>
-    <button id="scan">Scan & Analyze</button>
-    <button id="predict">Predict Progression</button>
-    <button id="weave">Weave Data (VLC)</button>
-    <button id="connectESP">Connect ESP32</button>
-    <div id="output"></div>
+    <button id="startCamera" aria-label="Start Camera">Start Camera</button>
+    <button id="scan" aria-label="Scan & Analyze" disabled>Scan & Analyze</button>
+    <button id="predict" aria-label="Predict Progression" disabled>Predict Progression</button>
+    <button id="weave" aria-label="Weave Data (VLC)">Weave Data (VLC)</button>
+    <button id="connectESP" aria-label="Connect ESP32">Connect ESP32</button>
+    <div id="output" aria-live="polite"></div>
     <div id="hologram">Hologram Placeholder</div>
 
     <script>
@@ -35,41 +39,61 @@
             const canvas = document.getElementById('canvas');
             const ctx = canvas.getContext('2d');
             const output = document.getElementById('output');
-            let model;
+            const startCameraBtn = document.getElementById('startCamera');
+            const scanBtn = document.getElementById('scan');
+            const predictBtn = document.getElementById('predict');
+            let model = null;
             let lightSensor;
             let espDevice;
+            let cameraStarted = false;
 
             // PWA Service Worker (basic offline stub)
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.register(new URL('', import.meta.url), {type: 'module'}).catch(err => output.innerText += `Service Worker Error: ${err}\n`);
+                navigator.serviceWorker.register('sw.js')
+                    .catch(err => appendOutput(`Service Worker Error: ${err}`));
+            }
+
+            // Helper to append output
+            function appendOutput(msg) {
+                output.innerText += msg + '\n';
+                output.scrollTop = output.scrollHeight;
             }
 
             // Load MobileNet for AI analysis
             async function loadModel() {
                 try {
                     model = await mobilenet.load();
-                    output.innerText += 'AI Model Loaded.\n';
+                    appendOutput('AI Model Loaded.');
+                    if (cameraStarted) {
+                        scanBtn.disabled = false;
+                        predictBtn.disabled = false;
+                    }
                 } catch (err) {
-                    output.innerText += `Model Load Error: ${err.message}\n`;
+                    appendOutput(`Model Load Error: ${err.message}`);
                     alert('Model failed to load: ' + err.message);
                 }
             }
             loadModel();
 
             // Function to add events for click and touchend
-            function addMobileEventListener(element, eventName, handler) {
+            function addMobileEventListener(element, handler) {
                 element.addEventListener('click', handler);
                 element.addEventListener('touchend', handler); // For mobile touch
             }
 
             // Access Camera
-            addMobileEventListener(document.getElementById('startCamera'), 'click', async () => {
+            addMobileEventListener(startCameraBtn, async () => {
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                     video.srcObject = stream;
-                    output.innerText += 'Camera Started.\n';
+                    cameraStarted = true;
+                    appendOutput('Camera Started.');
+                    if (model) {
+                        scanBtn.disabled = false;
+                        predictBtn.disabled = false;
+                    }
                 } catch (err) {
-                    output.innerText += `Camera Error: ${err.message}\n`;
+                    appendOutput(`Camera Error: ${err.message}`);
                     alert('Camera access failed: ' + err.message);
                 }
             });
@@ -79,70 +103,83 @@
                 try {
                     lightSensor = new AmbientLightSensor();
                     lightSensor.addEventListener('reading', () => {
-                        output.innerText += `Ambient Light: ${lightSensor.illuminance} lux\n`;
+                        appendOutput(`Ambient Light: ${lightSensor.illuminance} lux`);
                     });
                     lightSensor.start();
                 } catch (err) {
-                    output.innerText += `Sensor Error: ${err.message}\n`;
+                    appendOutput(`Sensor Error: ${err.message}`);
                 }
             } else {
-                output.innerText += 'Ambient Light Sensor not supported.\n';
+                appendOutput('Ambient Light Sensor not supported.');
             }
 
             // Scan: Capture frame, AI analyze (proxy hyperspectral)
-            addMobileEventListener(document.getElementById('scan'), 'click', async () => {
+            addMobileEventListener(scanBtn, async () => {
+                if (!cameraStarted || !model) {
+                    appendOutput('Camera or model not ready.');
+                    return;
+                }
+                if (!video.srcObject) {
+                    appendOutput('No camera stream available.');
+                    return;
+                }
                 try {
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                    
                     // Simple Compressive Sensing: Sparse RGB recovery (demo: average channels)
                     const sparseSignal = compressRGB(imgData);
                     const reconstructed = reconstructSparse(sparseSignal);
-                    output.innerText += `Reconstructed Spectrum: R${reconstructed.r}, G${reconstructed.g}, B${reconstructed.b}\n`;
-                    
+                    appendOutput(`Reconstructed Spectrum: R${reconstructed.r}, G${reconstructed.g}, B${reconstructed.b}`);
                     // AI Classification
                     const predictions = await model.classify(canvas);
-                    output.innerText += `AI Detection: ${predictions[0].className} (${predictions[0].probability.toFixed(2)})\n`;
-                    
+                    if (predictions && predictions.length > 0) {
+                        appendOutput(`AI Detection: ${predictions[0].className} (${predictions[0].probability.toFixed(2)})`);
+                    } else {
+                        appendOutput('AI Detection: No prediction.');
+                    }
                     // Simulated PPG/Health
                     const redAvg = imgData.reduce((sum, val, idx) => idx % 4 === 0 ? sum + val : sum, 0) / (imgData.length / 4);
-                    output.innerText += `Simulated Heart Rate: ${Math.round(60 + redAvg / 10)} bpm\n`;
+                    appendOutput(`Simulated Heart Rate: ${Math.round(60 + redAvg / 10)} bpm`);
                 } catch (err) {
-                    output.innerText += `Scan Error: ${err.message}\n`;
+                    appendOutput(`Scan Error: ${err.message}`);
                 }
             });
 
             // Predict: Chaos Theory (Lorenz for progression sim)
-            addMobileEventListener(document.getElementById('predict'), 'click', () => {
+            addMobileEventListener(predictBtn, () => {
                 try {
                     const trajectory = simulateLorenz(10, 28, 8/3, 0.01, 100);
-                    output.innerText += `Chaotic Prediction: Final X=${trajectory.x.toFixed(2)}\n`;
-                    document.getElementById('hologram').innerText = `Trajectory: ${trajectory.x}, ${trajectory.y}, ${trajectory.z}`;
+                    appendOutput(`Chaotic Prediction: Final X=${trajectory.x.toFixed(2)}`);
+                    document.getElementById('hologram').innerText = `Trajectory: ${trajectory.x.toFixed(2)}, ${trajectory.y.toFixed(2)}, ${trajectory.z.toFixed(2)}`;
                 } catch (err) {
-                    output.innerText += `Predict Error: ${err.message}\n`;
+                    appendOutput(`Predict Error: ${err.message}`);
                 }
             });
 
             // Weave: VLC Modulation via Canvas
-            addMobileEventListener(document.getElementById('weave'), 'click', () => {
+            addMobileEventListener(document.getElementById('weave'), () => {
                 try {
                     const data = 'HealthData';
-                    const binary = data.split('').map(c => c.charCodeAt(0).toString(2)).join('');
+                    const binary = data.split('').map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join('');
                     modulateCanvas(binary);
-                    output.innerText += 'VLC Weaving Started.\n';
+                    appendOutput('VLC Weaving Started.');
                 } catch (err) {
-                    output.innerText += `Weave Error: ${err.message}\n`;
+                    appendOutput(`Weave Error: ${err.message}`);
                 }
             });
 
             // Connect ESP32 via Web Bluetooth
-            addMobileEventListener(document.getElementById('connectESP'), 'click', async () => {
+            addMobileEventListener(document.getElementById('connectESP'), async () => {
+                if (!navigator.bluetooth) {
+                    appendOutput('Web Bluetooth not supported in this browser.');
+                    return;
+                }
                 try {
                     espDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: ['0000ffe0-0000-1000-8000-00805f9b34fb'] }] });
                     const server = await espDevice.gatt.connect();
-                    output.innerText += 'ESP32 Connected.\n';
+                    appendOutput('ESP32 Connected.');
                 } catch (err) {
-                    output.innerText += `Bluetooth Error: ${err.message}\n`;
+                    appendOutput(`Bluetooth Error: ${err.message}`);
                     alert('Bluetooth failed: ' + err.message);
                 }
             });
