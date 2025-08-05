@@ -4,22 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LumiQuantum Health Weaver</title>
-    <link rel="manifest" href="data:application/manifest+json,{
-        'short_name': 'LumiWeaver',
-        'name': 'LumiQuantum Health Weaver',
-        'icons': [{'src': 'icon.png', 'sizes': '192x192', 'type': 'image/png'}],
-        'start_url': '.',
-        'display': 'standalone',
-        'theme_color': '#000000',
-        'background_color': '#ffffff'
-    }">
+    <link rel="manifest" href="manifest.json">
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@latest"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 10px; background: #f0f0f0; }
         #video { width: 100%; max-width: 400px; }
         #canvas { display: none; }
-        button { margin: 10px; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button { margin: 10px; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; touch-action: manipulation; } /* Add touch-action for better mobile response */
         #output { margin-top: 20px; padding: 10px; background: #fff; border: 1px solid #ccc; }
         #hologram { width: 100%; height: 200px; background: #eee; } /* Placeholder for AR hologram */
     </style>
@@ -38,135 +30,154 @@
     <div id="hologram">Hologram Placeholder</div>
 
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const output = document.getElementById('output');
-        let model;
-        let lightSensor;
-        let espDevice;
+        document.addEventListener('DOMContentLoaded', () => {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            const output = document.getElementById('output');
+            let model;
+            let lightSensor;
+            let espDevice;
 
-        // PWA Service Worker (basic offline stub)
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register(new URL('', import.meta.url), {type: 'module'});
-        }
-
-        // Load MobileNet for AI analysis
-        async function loadModel() {
-            model = await mobilenet.load();
-            output.innerText += 'AI Model Loaded.\n';
-        }
-        loadModel();
-
-        // Access Camera
-        document.getElementById('startCamera').addEventListener('click', async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-                video.srcObject = stream;
-            } catch (err) {
-                output.innerText += `Camera Error: ${err}\n`;
+            // PWA Service Worker (basic offline stub)
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register(new URL('', import.meta.url), {type: 'module'}).catch(err => output.innerText += `Service Worker Error: ${err}\n`);
             }
-        });
 
-        // Access Ambient Light Sensor
-        if ('AmbientLightSensor' in window) {
-            lightSensor = new AmbientLightSensor();
-            lightSensor.addEventListener('reading', () => {
-                output.innerText += `Ambient Light: ${lightSensor.illuminance} lux\n`;
+            // Load MobileNet for AI analysis
+            async function loadModel() {
+                try {
+                    model = await mobilenet.load();
+                    output.innerText += 'AI Model Loaded.\n';
+                } catch (err) {
+                    output.innerText += `Model Load Error: ${err.message}\n`;
+                    alert('Model failed to load: ' + err.message);
+                }
+            }
+            loadModel();
+
+            // Function to add events for click and touchend
+            function addMobileEventListener(element, eventName, handler) {
+                element.addEventListener('click', handler);
+                element.addEventListener('touchend', handler); // For mobile touch
+            }
+
+            // Access Camera
+            addMobileEventListener(document.getElementById('startCamera'), 'click', async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    video.srcObject = stream;
+                    output.innerText += 'Camera Started.\n';
+                } catch (err) {
+                    output.innerText += `Camera Error: ${err.message}\n`;
+                    alert('Camera access failed: ' + err.message);
+                }
             });
-            lightSensor.start();
-        }
 
-        // Scan: Capture frame, AI analyze (proxy hyperspectral)
-        document.getElementById('scan').addEventListener('click', async () => {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-            
-            // Simple Compressive Sensing: Sparse RGB recovery (demo: average channels)
-            const sparseSignal = compressRGB(imgData); // Custom function below
-            const reconstructed = reconstructSparse(sparseSignal);
-            output.innerText += `Reconstructed Spectrum: R${reconstructed.r}, G${reconstructed.g}, B${reconstructed.b}\n`;
-            
-            // AI Classification (e.g., detect 'skin' or anomaly)
-            const predictions = await model.classify(canvas);
-            output.innerText += `AI Detection: ${predictions[0].className} (${predictions[0].probability.toFixed(2)})\n`;
-            
-            // Simulated PPG/Health: From red channel (heart rate proxy)
-            const redAvg = imgData.reduce((sum, val, idx) => idx % 4 === 0 ? sum + val : sum, 0) / (imgData.length / 4);
-            output.innerText += `Simulated Heart Rate: ${Math.round(60 + redAvg / 10)} bpm\n`;
-        });
+            // Access Ambient Light Sensor
+            if ('AmbientLightSensor' in window) {
+                try {
+                    lightSensor = new AmbientLightSensor();
+                    lightSensor.addEventListener('reading', () => {
+                        output.innerText += `Ambient Light: ${lightSensor.illuminance} lux\n`;
+                    });
+                    lightSensor.start();
+                } catch (err) {
+                    output.innerText += `Sensor Error: ${err.message}\n`;
+                }
+            } else {
+                output.innerText += 'Ambient Light Sensor not supported.\n';
+            }
 
-        // Predict: Chaos Theory (Lorenz for progression sim)
-        document.getElementById('predict').addEventListener('click', () => {
-            const trajectory = simulateLorenz(10, 28, 8/3, 0.01, 100); // sigma, rho, beta, dt, steps
-            output.innerText += `Chaotic Prediction: Final X=${trajectory.x.toFixed(2)}\n`;
-            // Visualize in hologram div (simple text plot)
-            document.getElementById('hologram').innerText = `Trajectory: ${trajectory.x}, ${trajectory.y}, ${trajectory.z}`;
-        });
+            // Scan: Capture frame, AI analyze (proxy hyperspectral)
+            addMobileEventListener(document.getElementById('scan'), 'click', async () => {
+                try {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                    
+                    // Simple Compressive Sensing: Sparse RGB recovery (demo: average channels)
+                    const sparseSignal = compressRGB(imgData);
+                    const reconstructed = reconstructSparse(sparseSignal);
+                    output.innerText += `Reconstructed Spectrum: R${reconstructed.r}, G${reconstructed.g}, B${reconstructed.b}\n`;
+                    
+                    // AI Classification
+                    const predictions = await model.classify(canvas);
+                    output.innerText += `AI Detection: ${predictions[0].className} (${predictions[0].probability.toFixed(2)})\n`;
+                    
+                    // Simulated PPG/Health
+                    const redAvg = imgData.reduce((sum, val, idx) => idx % 4 === 0 ? sum + val : sum, 0) / (imgData.length / 4);
+                    output.innerText += `Simulated Heart Rate: ${Math.round(60 + redAvg / 10)} bpm\n`;
+                } catch (err) {
+                    output.innerText += `Scan Error: ${err.message}\n`;
+                }
+            });
 
-        // Weave: VLC Modulation via Canvas (flash patterns)
-        document.getElementById('weave').addEventListener('click', () => {
-            // Modulate: Binary pattern for data (e.g., '1010' as colors)
-            const data = 'HealthData';
-            const binary = data.split('').map(c => c.charCodeAt(0).toString(2)).join('');
-            modulateCanvas(binary);
-            output.innerText += 'VLC Weaving Started.\n';
-        });
+            // Predict: Chaos Theory (Lorenz for progression sim)
+            addMobileEventListener(document.getElementById('predict'), 'click', () => {
+                try {
+                    const trajectory = simulateLorenz(10, 28, 8/3, 0.01, 100);
+                    output.innerText += `Chaotic Prediction: Final X=${trajectory.x.toFixed(2)}\n`;
+                    document.getElementById('hologram').innerText = `Trajectory: ${trajectory.x}, ${trajectory.y}, ${trajectory.z}`;
+                } catch (err) {
+                    output.innerText += `Predict Error: ${err.message}\n`;
+                }
+            });
 
-        // Connect ESP32 via Web Bluetooth
-        document.getElementById('connectESP').addEventListener('click', async () => {
-            try {
-                espDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: ['0000ffe0-0000-1000-8000-00805f9b34fb'] }] });
-                const server = await espDevice.gatt.connect();
-                output.innerText += 'ESP32 Connected.\n';
-                // Read sensor data (demo)
-            } catch (err) {
-                output.innerText += `Bluetooth Error: ${err}\n`;
+            // Weave: VLC Modulation via Canvas
+            addMobileEventListener(document.getElementById('weave'), 'click', () => {
+                try {
+                    const data = 'HealthData';
+                    const binary = data.split('').map(c => c.charCodeAt(0).toString(2)).join('');
+                    modulateCanvas(binary);
+                    output.innerText += 'VLC Weaving Started.\n';
+                } catch (err) {
+                    output.innerText += `Weave Error: ${err.message}\n`;
+                }
+            });
+
+            // Connect ESP32 via Web Bluetooth
+            addMobileEventListener(document.getElementById('connectESP'), 'click', async () => {
+                try {
+                    espDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: ['0000ffe0-0000-1000-8000-00805f9b34fb'] }] });
+                    const server = await espDevice.gatt.connect();
+                    output.innerText += 'ESP32 Connected.\n';
+                } catch (err) {
+                    output.innerText += `Bluetooth Error: ${err.message}\n`;
+                    alert('Bluetooth failed: ' + err.message);
+                }
+            });
+
+            // Helpers (unchanged)
+            function compressRGB(data) {
+                let r=0, g=0, b=0;
+                for (let i=0; i<data.length; i+=4) { r+=data[i]; g+=data[i+1]; b+=data[i+2]; }
+                return { r: r/(data.length/4), g: g/(data.length/4), b: b/(data.length/4) };
+            }
+            function reconstructSparse(compressed) {
+                return { r: compressed.r * 1.1, g: compressed.g * 0.9, b: compressed.b };
+            }
+            function simulateLorenz(sigma, rho, beta, dt, steps) {
+                let x=1, y=1, z=1;
+                for (let i=0; i<steps; i++) {
+                    const k1x = sigma * (y - x);
+                    const k1y = x * (rho - z) - y;
+                    const k1z = x * y - beta * z;
+                    x += dt * k1x;
+                    y += dt * k1y;
+                    z += dt * k1z;
+                }
+                return {x, y, z};
+            }
+            function modulateCanvas(binary) {
+                let idx = 0;
+                const interval = setInterval(() => {
+                    ctx.fillStyle = binary[idx] === '1' ? '#fff' : '#000';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    idx = (idx + 1) % binary.length;
+                }, 100);
+                setTimeout(() => clearInterval(interval), 5000);
             }
         });
-
-        // Helper: Simple Compressive Sensing (greedy approximation)
-        function compressRGB(data) {
-            // Demo: Average per channel (sparse measurement)
-            let r=0, g=0, b=0;
-            for (let i=0; i<data.length; i+=4) { r+=data[i]; g+=data[i+1]; b+=data[i+2]; }
-            return { r: r/(data.length/4), g: g/(data.length/4), b: b/(data.length/4) };
-        }
-        function reconstructSparse(compressed) {
-            // Demo reconstruction: Add noise/simulate inverse (basic)
-            return { r: compressed.r * 1.1, g: compressed.g * 0.9, b: compressed.b };
-        }
-
-        // Helper: Lorenz Simulator (RK4 method)
-        function simulateLorenz(sigma, rho, beta, dt, steps) {
-            let x=1, y=1, z=1;
-            for (let i=0; i<steps; i++) {
-                const k1x = sigma * (y - x);
-                const k1y = x * (rho - z) - y;
-                const k1z = x * y - beta * z;
-                
-                const k2x = sigma * ((y + dt/2 * k1y) - (x + dt/2 * k1x));
-                const k2y = (x + dt/2 * k1x) * (rho - (z + dt/2 * k1z)) - (y + dt/2 * k1y);
-                const k2z = (x + dt/2 * k1x) * (y + dt/2 * k1y) - beta * (z + dt/2 * k1z);
-                
-                // Simplified: Use k1 only for demo (full RK4 truncated for brevity)
-                x += dt * k1x;
-                y += dt * k1y;
-                z += dt * k1z;
-            }
-            return {x, y, z};
-        }
-
-        // Helper: VLC Modulation (flash canvas colors)
-        function modulateCanvas(binary) {
-            let idx = 0;
-            const interval = setInterval(() => {
-                ctx.fillStyle = binary[idx] === '1' ? '#fff' : '#000';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                idx = (idx + 1) % binary.length;
-            }, 100); // 10Hz modulation
-            setTimeout(() => clearInterval(interval), 5000); // Stop after 5s
-        }
     </script>
 </body>
 </html>
